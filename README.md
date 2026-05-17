@@ -54,7 +54,6 @@ curl -s http://localhost:8090/actuator/prometheus | grep '^sokind_'
 │   └── openapi.json
 ├── http/
 │   ├── http-client.env.json     # IntelliJ HTTP Client env
-│   ├── day1.http                # 시나리오 검증 (REST, EDIT/DELETE/404/409 포함)
 │   └── k6/load-ingest.js        # k6 부하 시나리오
 └── src/
     ├── main/kotlin/com/sokind/chat/
