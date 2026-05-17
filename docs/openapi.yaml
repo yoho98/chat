@@ -1,0 +1,492 @@
+openapi: 3.1.0
+info:
+  title: Sokind Chat API
+  description: |-
+    1:1 realtime chat with event-sourced state restoration.
+
+    - Source of truth = append-only `events` table.
+    - Idempotency: client must send a UUID `clientEventId` per logical event;
+      retries collapse to a single row and return the original `serverSeq`.
+    - Ordering: `server_seq` (BIGINT AUTO_INCREMENT) — arrival order, clock-skew safe.
+    - State restoration: `GET /sessions/{id}/timeline?at=...` folds events deterministically.
+  version: 0.1.0
+servers:
+- url: http://localhost:8090
+  description: Generated server url
+paths:
+  /sessions:
+    get:
+      tags:
+      - session-controller
+      operationId: list
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - PAUSED
+          - ENDED
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: userId
+        in: query
+        required: false
+        description: 해당 user가 참여한(JOIN 한) 세션만 반환. participants 테이블의 EXISTS 서브쿼리로 매칭.
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SessionResponse"
+    post:
+      tags:
+      - session-controller
+      operationId: create
+      responses:
+        "201":
+          description: Created
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+  /sessions/{sessionId}/events:
+    get:
+      tags:
+      - event-controller
+      operationId: listEvents
+      description: |-
+        디버깅/검증용 raw events 조회. cursor 페이지네이션 — 응답의 nextFromSeq 를
+        다음 호출의 fromSeq 로 전달. fromSeq 는 exclusive (>), toSeq 는 inclusive (≤).
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: fromSeq
+        in: query
+        required: false
+        description: server_seq > fromSeq (exclusive)
+        schema:
+          type: integer
+          format: int64
+      - name: toSeq
+        in: query
+        required: false
+        description: server_seq ≤ toSeq (inclusive)
+        schema:
+          type: integer
+          format: int64
+      - name: from
+        in: query
+        required: false
+        description: server_ts ≥ from (ISO 8601)
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        required: false
+        description: server_ts ≤ to (ISO 8601)
+        schema:
+          type: string
+          format: date-time
+      - name: limit
+        in: query
+        required: false
+        description: 1~500, 기본 100
+        schema:
+          type: integer
+          default: 100
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/EventListResponse"
+        "404":
+          description: 세션 없음
+    post:
+      tags:
+      - event-controller
+      operationId: ingest
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-User-Id
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+  /sessions/{id}/leave:
+    post:
+      tags:
+      - session-controller
+      operationId: leave
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-User-Id
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+  /sessions/{id}/join:
+    post:
+      tags:
+      - session-controller
+      operationId: join
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-User-Id
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+  /sessions/{id}/end:
+    post:
+      tags:
+      - session-controller
+      operationId: end
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+  /sessions/{sessionId}/timeline:
+    get:
+      tags:
+      - timeline-controller
+      operationId: get
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: at
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Timeline"
+  /sessions/{id}:
+    get:
+      tags:
+      - session-controller
+      operationId: get_1
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+  /sessions/{id}/snapshots:
+    post:
+      tags:
+      - snapshot-controller
+      operationId: createSnapshot
+      description: |-
+        호출 시점까지의 세션 상태를 강제로 스냅샷 테이블에 저장. 같은 (sessionId, upToSeq)가
+        이미 있으면 created=false 로 멱등 응답. 이벤트가 0건이면 upToSeq=0, created=false.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/SnapshotResponse"
+        "404":
+          description: 세션 없음
+  /sessions/{id}/participants:
+    get:
+      tags:
+      - session-controller
+      operationId: participants
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ParticipantSummary"
+components:
+  schemas:
+    SessionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - PAUSED
+          - ENDED
+        createdAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+    IngestRequest:
+      type: object
+      properties:
+        clientEventId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum:
+          - MESSAGE
+          - JOIN
+          - LEAVE
+          - EDIT
+          - DELETE
+          - DISCONNECT
+          - RECONNECT
+        payload:
+          type: object
+          additionalProperties:
+            type: object
+        clientTs:
+          type: string
+          format: date-time
+      required:
+      - clientEventId
+      - clientTs
+      - type
+    IngestResponse:
+      type: object
+      properties:
+        serverSeq:
+          type: integer
+          format: int64
+        duplicate:
+          type: boolean
+    MessageView:
+      type: object
+      properties:
+        seq:
+          type: integer
+          format: int64
+        userId:
+          type: string
+        clientTs:
+          type: string
+          format: date-time
+        payload:
+          type: object
+          additionalProperties:
+            type: object
+        deleted:
+          type: boolean
+        editedAtSeq:
+          type: integer
+          format: int64
+    ParticipantView:
+      type: object
+      properties:
+        userId:
+          type: string
+        presence:
+          type: string
+          enum:
+          - ONLINE
+          - OFFLINE
+    Timeline:
+      type: object
+      properties:
+        at:
+          type: string
+          format: date-time
+        upToSeq:
+          type: integer
+          format: int64
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/ParticipantView"
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/MessageView"
+    ParticipantSummary:
+      type: object
+      properties:
+        userId:
+          type: string
+        presence:
+          type: string
+          enum:
+          - ONLINE
+          - OFFLINE
+        joinedAt:
+          type: string
+          format: date-time
+        leftAt:
+          type: string
+          format: date-time
+    SnapshotResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        upToSeq:
+          type: integer
+          format: int64
+        created:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+    EventItem:
+      type: object
+      properties:
+        serverSeq:
+          type: integer
+          format: int64
+        sessionId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum:
+          - MESSAGE
+          - JOIN
+          - LEAVE
+          - EDIT
+          - DELETE
+          - DISCONNECT
+          - RECONNECT
+        userId:
+          type: string
+        payload:
+          type: object
+          additionalProperties:
+            type: object
+        clientTs:
+          type: string
+          format: date-time
+        serverTs:
+          type: string
+          format: date-time
+    EventListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/EventItem"
+        nextFromSeq:
+          type: integer
+          format: int64
+          nullable: true
+  headers:
+    X-User-Id:
+      description: Caller's user identifier (no authentication in this assignment).
+      schema:
+        type: string

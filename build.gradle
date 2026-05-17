@@ -1,0 +1,112 @@
+plugins {
+	id 'org.jetbrains.kotlin.jvm' version '2.2.21'
+	id 'org.jetbrains.kotlin.plugin.spring' version '2.2.21'
+	id 'org.springframework.boot' version '4.0.6'
+	id 'io.spring.dependency-management' version '1.1.7'
+	id 'org.jetbrains.kotlin.plugin.jpa' version '2.2.21'
+	id 'jacoco'
+	id 'org.sonarqube' version '5.1.0.4882'
+}
+
+group = 'com.sokind'
+version = '0.0.1-SNAPSHOT'
+description = 'Sokind 1:1 realtime chat with event-sourced state restoration'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'io.micrometer:micrometer-registry-prometheus'
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	implementation 'org.springframework.boot:spring-boot-starter-flyway'
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	implementation 'org.springframework.boot:spring-boot-starter-websocket'
+	implementation 'org.flywaydb:flyway-mysql'
+	implementation 'org.jetbrains.kotlin:kotlin-reflect'
+	implementation 'tools.jackson.module:jackson-module-kotlin'
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.6'
+	runtimeOnly 'com.mysql:mysql-connector-j'
+	testImplementation 'org.springframework.boot:spring-boot-starter-actuator-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-flyway-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-websocket-test'
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation 'org.testcontainers:junit-jupiter:1.20.4'
+	testImplementation 'org.testcontainers:mysql:1.20.4'
+	testImplementation 'io.mockk:mockk:1.13.13'
+	testImplementation 'org.jetbrains.kotlin:kotlin-test-junit5'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+kotlin {
+	compilerOptions {
+		freeCompilerArgs.addAll '-Xjsr305=strict', '-Xannotation-default-target=param-property'
+	}
+}
+
+allOpen {
+	annotation 'jakarta.persistence.Entity'
+	annotation 'jakarta.persistence.MappedSuperclass'
+	annotation 'jakarta.persistence.Embeddable'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+	finalizedBy jacocoTestReport
+}
+
+jacoco {
+	toolVersion = '0.8.12'
+}
+
+jacocoTestReport {
+	dependsOn test
+	reports {
+		xml.required = true
+		html.required = true
+		csv.required = false
+	}
+	// JaCoCo 가 어쩌다 생성한 컴파일러 합성 클래스/JPA 컨버터를 가리지 않게 필터링
+	classDirectories.setFrom(
+		files(classDirectories.files.collect {
+			fileTree(dir: it, exclude: [
+				'com/sokind/chat/ChatApplication*',
+				'com/sokind/chat/**/*Config*',
+				'com/sokind/chat/**/dto/**',
+				'**/Q*.class',                // QueryDSL/Hibernate metamodel (있다면)
+			])
+		})
+	)
+}
+
+sonar {
+	properties {
+		property 'sonar.projectKey',   System.getenv('SONAR_PROJECT_KEY') ?: 'sokind-chat'
+		property 'sonar.projectName',  'Sokind Chat'
+		property 'sonar.host.url',     System.getenv('SONAR_HOST_URL')    ?: 'http://localhost:9000'
+		property 'sonar.token',        System.getenv('SONAR_TOKEN')       ?: ''
+		property 'sonar.sources',      'src/main/kotlin'
+		property 'sonar.tests',        'src/test/kotlin'
+		property 'sonar.coverage.jacoco.xmlReportPaths',
+			"$buildDir/reports/jacoco/test/jacocoTestReport.xml"
+		property 'sonar.kotlin.binaries', "$buildDir/classes/kotlin/main"
+		property 'sonar.coverage.exclusions',
+			'**/ChatApplication.kt,**/*Config.kt,**/api/demo/**'
+	}
+}
+
+tasks.named('sonar').configure {
+	dependsOn jacocoTestReport
+}
